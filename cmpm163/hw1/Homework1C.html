@@ -1,0 +1,286 @@
+﻿
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Static</title>
+		<meta charset="utf-8">
+		<style>
+			body {
+			  	margin: 0px;
+				overflow: hidden;
+			}
+		</style>
+	</head>
+<body>
+
+<div id="container"></div>
+
+    <script src="js/three.js"></script>
+  
+
+    <script id="vertexShader" type="x-shader/x-vertex">
+
+	    uniform mat4 modelViewMatrix;
+      	uniform mat4 projectionMatrix;
+
+	    attribute vec3 position;
+	
+    	void main() {
+ 		    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+	    }
+
+    </script>
+
+    <script id="fragmentShader" type="x-shader/x-fragment">
+
+		precision mediump float;
+
+		uniform vec2 textureSize; // The width and height of our screen
+		uniform sampler2D bufferTexture; // Our input texture
+		
+		void main() {
+
+			vec2 pt = gl_FragCoord.xy; // for simple scenes, can also use gl_FragCoord instead of uv info, divide by texture size to get a value between 0.0 and 1.0
+			vec4 C = texture2D(bufferTexture, vec2(pt.x/textureSize.x, pt.y/textureSize.y)); // first arg is the texture, second arg is the coordinates
+
+			float cx = pt.x / textureSize.x; // cell x-coord (?)
+
+			float left = cx - (1.0 / textureSize.x);
+			if (left < 0.0) { left = 1.0; } // check for borders (?)
+			float right = cx + (1.0 / textureSize.x);
+			if (left > 1.0) { left = 0.0; }
+
+
+			float cy = pt.y/textureSize.y; // cell y-coord (?)
+			
+			float down = cy - (1.0 / textureSize.y);
+			if (down < 0.0) { down = 1.0; }
+			float up = cy + (1.0 / textureSize.y);
+			if (up > 1.0) { up = 0.0; }
+
+
+			vec4 arr[9];
+
+			arr[0] = texture2D(bufferTexture, vec2(cx   , up));   // N
+			arr[1] = texture2D(bufferTexture, vec2(right, up));   // NE
+			arr[2] = texture2D(bufferTexture, vec2(right, cy));   // E
+			arr[3] = texture2D(bufferTexture, vec2(right, down)); // SE
+			arr[4] = texture2D(bufferTexture, vec2(cx   , down)); // S
+			arr[5] = texture2D(bufferTexture, vec2(left , down)); // SW
+			arr[6] = texture2D(bufferTexture, vec2(left , cy));   // W
+			arr[7] = texture2D(bufferTexture, vec2(left , up));   // NW
+            arr[8] = texture2D(bufferTexture, vec2(cx, cy)); // Current cell
+
+			int cnt[7]; // count ROYGBIV
+            for (int i = 0; i < 7; i++) { // initialize
+                cnt[i] = 0;
+            }
+
+			for (int i = 0; i < 8; i++) { // check all 8 sides
+                
+                if (arr[i].b > .0) { // arr[i].b = blue channel     // Any blue = Blue, Indigo, Violet
+                    if (arr[i].b == 1.0) cnt[4]++;                  // Full blue = Blue
+                    else if (arr[i].b == (211.0/255.0)) cnt[6]++;   // Mostly blue = Violet
+                    else cnt[5]++;                                  // Partial blue = Indigo
+                 } else if (arr[i].r == 1.0) {                      // Full red = Red, Orange, Yellow
+                    if (arr[i].g == 1.0) cnt[2]++;                  // Full green = Yellow
+                    else if (arr[i].g == (127.0/255.0)) cnt[1]++;   // Partial green = Orange
+                    else cnt[0]++;                                  // No green = Red
+                } else cnt[3] += 1;                                 // No red and no blue = Green
+
+			}
+	        
+            int max = -1;
+            int index = -1;
+            for (int i = 0; i < 7; i++) {
+                if (cnt[i] > max) {
+                    if (cnt[i] < 5) {
+                        max = cnt[i];
+                        index = i;
+                    }
+                }
+            }
+            
+			if (index == 0)      gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); // Red exists the most
+            else if (index == 1) gl_FragColor = vec4(1.0, (127.0/255.0), .0, 1.0);
+            else if (index == 2) gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);
+            else if (index == 3) gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
+            else if (index == 4) gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+            else if (index == 5) gl_FragColor = vec4((75.0/255.0), 0.0, (130.0/255.0), 1.0);
+            else                 gl_FragColor = vec4((148.0/255.0), 0.0, (211.0/255.0), 1.0);
+
+	    }
+
+	</script>
+
+
+
+	<script>
+		
+
+var scene;
+var camera;
+var renderer;
+
+
+var resX = 1980;
+var resY = 1020;
+
+var bufferScene;
+var bufferMaterial;
+var bufferObject;
+var FBO_A, FBO_B;
+var plane;
+var fullScreenQuad;
+
+
+
+
+scene_setup(); // initialize the Three.js scene
+
+function scene_setup(){
+	// This is the basic scene setup
+	scene = new THREE.Scene();
+	var width = window.innerWidth;
+	var height = window.innerHeight;
+
+	// orthographic camera can be used for 2D
+	camera = new THREE.OrthographicCamera( width / -2, width / 2, height / 2, height / -2, 0.1, 1000 );
+	camera.position.z = 0.2;
+
+	renderer = new THREE.WebGLRenderer();
+	renderer.setSize( window.innerWidth, window.innerHeight );
+	document.body.appendChild( renderer.domElement );
+}
+
+
+FBO_setup();
+
+function FBO_setup(){
+	// Create off-screen buffer scene
+	bufferScene = new THREE.Scene();
+	
+	// Create 2 buffer textures
+	// FBO_A = new THREE.WebGLRenderTarget( resX, resY ); // these are blurry
+	// FBO_B = new THREE.WebGLRenderTarget( resX, resY ); 
+	FBO_A = new THREE.WebGLRenderTarget( resX, resY, { minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter} ); // these are sharp
+	FBO_B = new THREE.WebGLRenderTarget( resX, resY, { minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter} );
+
+
+	
+	// Begin by passing an initial "seed" texture to shader, containing randomly placed cells
+	var dataTexture = createDataTexture();
+
+	bufferMaterial = new THREE.RawShaderMaterial( {
+		uniforms: {
+			bufferTexture: { type: "t", value: dataTexture },
+			textureSize : {type: "v2", value: new THREE.Vector2( resX, resY )}  // shader doesn't have access to these global variables, so pass in the resolution
+		},
+		vertexShader: document.getElementById( 'vertexShader' ).innerHTML,
+		fragmentShader: document.getElementById( 'fragmentShader' ).innerHTML
+	} );
+
+	// we can use a Three.js Plane Geometry along with the orthographic camera to create a "full screen quad"
+	plane = new THREE.PlaneBufferGeometry( window.innerWidth, window.innerHeight )
+
+	bufferObject = new THREE.Mesh(plane, bufferMaterial);
+	bufferScene.add(bufferObject);
+
+
+	// Draw textureB to screen 
+	fullScreenQuad = new THREE.Mesh(plane, new THREE.MeshBasicMaterial());
+	scene.add(fullScreenQuad);
+}
+
+
+
+render();
+
+function render() {
+
+	requestAnimationFrame( render );
+
+	
+	// Draw to the active offscreen buffer (whatever is stored in FBO_B), that is the output of this rendering pass will be stored in the texture associated with FBO_B
+	renderer.render(bufferScene, camera, FBO_B);
+	
+	// grab that texture and map it to the full screen quad
+	fullScreenQuad.material.map = FBO_B.texture;
+
+	// Then draw the full sceen quad to the on screen buffer, ie, the display
+	renderer.render(scene, camera);
+
+
+	// Now prepare for the next cycle by swapping FBO_A and FBO_B, so that the previous frame's *output* becomes the next frame's *input*
+	var t = FBO_A;
+	FBO_A = FBO_B;
+	FBO_B = t;
+	bufferMaterial.uniforms.bufferTexture.value = FBO_A.texture;
+}
+
+// the random seed function
+function createDataTexture() {
+
+	// create a buffer with color data
+
+	var size = resX * resY;
+	var data = new Uint8Array(4 * size);
+
+
+    for (var i = 0; i < size; i++) {
+
+        var stride = i * 4;
+        var result = Math.random();
+
+        // ROYGBIV
+        // This is weighted toward the cooler colors (GBIV), since it fades to warmer colors (ROY)
+        if (result > .9) { // Red
+            data[stride] = 255; // Red
+            data[stride + 1] = 0; // Green
+            data[stride + 2] = 0; // Blue
+        } else if (result > .8) { // Orange
+            data[stride] = 255;
+            data[stride + 1] = 127;
+            data[stride + 2] = 0;
+        } else if (result > 0.7) { // Yellow
+            data[stride] = 255;
+            data[stride + 1] = 255;
+            data[stride + 2] = 0;
+        } else if (result > .55) { // Green
+            data[stride] = 0;
+            data[stride + 1] = 255;
+            data[stride + 2] = 0;
+        } else if (result > .4) { // Blue
+            data[stride] = 0;
+            data[stride + 1] = 0;
+            data[stride + 2] = 255;
+        } else if (result > .2) { // Indigo
+            data[stride] = 75;
+            data[stride + 1] = 0;
+            data[stride + 2] = 130;
+        } else { // Violet
+			data[stride] = 148;
+			data[stride + 1] = 0;
+			data[stride + 2] = 211;
+        }
+
+        data[stride + 3] = 255; // Alpha    
+
+	}
+
+
+	// used the buffer to create a DataTexture
+
+	console.log(data);
+	var texture = new THREE.DataTexture(data, resX, resY, THREE.RGBAFormat);
+	
+	texture.needsUpdate = true; // just a weird thing that Three.js wants you to do after you set the data for the texture
+
+	return texture;
+
+}
+	</script>
+
+</body>
+</html>
+
